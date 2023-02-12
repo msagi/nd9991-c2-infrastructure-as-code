@@ -1,0 +1,456 @@
+Parameters:
+  EnvironmentName:
+    Type: String
+  VPCRegion:
+    Type: String
+  VPCCIDR:
+    Type: String
+  PubSubnet1CIDR:
+    Type: String
+  PubSubnet2CIDR:
+    Type: String
+  PrivSubnet1CIDR:
+    Type: String
+  PrivSubnet2CIDR:
+    Type: String
+  AppServerInstanceType:
+    Type: String
+  AppServerAMI:
+    Type: String
+  AppServerVolumeSize:
+    Type: Number
+  AppServerInstancesMin:
+    Type: String
+  AppServerInstancesMax:
+    Type: String
+Resources:
+
+  # VPC
+  MainVPC:
+    Type: "AWS::EC2::VPC"
+    Properties:
+      CidrBlock: !Ref VPCCIDR
+      Tags:
+        - Key: "Name"
+          Value: !Sub "${EnvironmentName} VPC"
+
+  # Public subnet 1
+  PublicSubnet1:
+    Type: "AWS::EC2::Subnet"
+    Properties:
+      VpcId: !Ref MainVPC
+      AvailabilityZone: 
+        Fn::Select:
+          - 0
+          - Fn::GetAZs: !Ref VPCRegion
+      CidrBlock: !Ref PubSubnet1CIDR
+      MapPublicIpOnLaunch: true
+      Tags:
+        - Key: "Name"
+          Value: !Sub "${EnvironmentName} Public Subnet 1"
+
+  # Public subnet 2
+  PublicSubnet2:
+    Type: "AWS::EC2::Subnet"
+    Properties:
+      VpcId: !Ref MainVPC
+      AvailabilityZone: 
+        Fn::Select:
+          - 1
+          - Fn::GetAZs: !Ref VPCRegion
+      CidrBlock: !Ref PubSubnet2CIDR
+      MapPublicIpOnLaunch: true
+      Tags:
+        - Key: "Name"
+          Value: !Sub "${EnvironmentName} Public Subnet 2"
+
+  # Private subnet 1
+  PrivateSubnet1:
+    Type: "AWS::EC2::Subnet"
+    Properties:
+      VpcId: !Ref MainVPC
+      AvailabilityZone: 
+        Fn::Select:
+          - 0
+          - Fn::GetAZs: !Ref VPCRegion
+      CidrBlock: !Ref PrivSubnet1CIDR
+      MapPublicIpOnLaunch: false
+      Tags:
+        - Key: "Name"
+          Value: !Sub "${EnvironmentName} Private Subnet 1"
+
+  # Private subnet 2
+  PrivateSubnet2:
+    Type: "AWS::EC2::Subnet"
+    Properties:
+      VpcId: !Ref MainVPC
+      AvailabilityZone: 
+        Fn::Select:
+          - 1
+          - Fn::GetAZs: !Ref VPCRegion
+      CidrBlock: !Ref PrivSubnet2CIDR
+      MapPublicIpOnLaunch: false
+      Tags:
+        - Key: "Name"
+          Value: !Sub "${EnvironmentName} Private Subnet 2"
+
+  # Internet Gateway          
+  InternetGW:
+    Type: AWS::EC2::InternetGateway
+    Properties: 
+      Tags: 
+        - Key: Name
+          Value: !Sub "${EnvironmentName} Internet Gateway"   
+
+  AttachInternetGW:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      InternetGatewayId: !Ref InternetGW
+      VpcId: !Ref MainVPC
+
+  # Elastic IPs
+  NatGateway1EIP:
+    Type: AWS::EC2::EIP
+    DependsOn: AttachInternetGW
+    Properties: 
+      Domain: vpc
+      Tags: 
+        - Key: Name
+          Value: !Sub "${EnvironmentName} Elastic IP for NAT Gateway 1"   
+
+  NatGateway2EIP:
+    Type: AWS::EC2::EIP
+    DependsOn: AttachInternetGW
+    Properties:
+      Domain: vpc
+      Tags: 
+        - Key: Name
+          Value: !Sub "${EnvironmentName} Elastic IP for NAT Gateway 2"   
+
+  # NAT Gateways
+  NatGateway1: 
+    Type: AWS::EC2::NatGateway
+    Properties: 
+      AllocationId: !GetAtt NatGateway1EIP.AllocationId
+      SubnetId: !Ref PublicSubnet1
+      Tags: 
+        - Key: Name
+          Value: !Sub "${EnvironmentName} NAT Gateway for Public Subnet 1"   
+
+  NatGateway2: 
+    Type: AWS::EC2::NatGateway
+    Properties:
+      AllocationId: !GetAtt NatGateway2EIP.AllocationId
+      SubnetId: !Ref PublicSubnet2
+      Tags: 
+        - Key: Name
+          Value: !Sub "${EnvironmentName} NAT Gateway for Public Subnet 2"   
+
+  ###########
+  # ROUTING #
+  ###########
+
+  # Public subnets routing
+  PublicRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties: 
+      VpcId: !Ref MainVPC
+      Tags: 
+        - Key: Name 
+          Value: !Sub "${EnvironmentName} Public Routes"
+
+  DefaultPublicRoute: 
+    Type: AWS::EC2::Route
+    DependsOn: AttachInternetGW
+    Properties: 
+      RouteTableId: !Ref PublicRouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !Ref InternetGW
+
+  PublicSubnet1RouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId: !Ref PublicRouteTable
+      SubnetId: !Ref PublicSubnet1
+
+  PublicSubnet2RouteTableAssociation:
+      Type: AWS::EC2::SubnetRouteTableAssociation
+      Properties:
+          RouteTableId: !Ref PublicRouteTable
+          SubnetId: !Ref PublicSubnet2   
+
+  # Private subnets routing
+  PrivateRouteTable1:
+    Type: AWS::EC2::RouteTable
+    Properties: 
+      VpcId: !Ref MainVPC
+      Tags: 
+        - Key: Name 
+          Value: !Sub "${EnvironmentName} Private Routes (AZ1)"
+
+  DefaultPrivateRoute1:
+    Type: AWS::EC2::Route
+    Properties:
+      RouteTableId: !Ref PrivateRouteTable1
+      DestinationCidrBlock: 0.0.0.0/0
+      NatGatewayId: !Ref NatGateway1
+
+  PrivateSubnet1RouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId: !Ref PrivateRouteTable1
+      SubnetId: !Ref PrivateSubnet1
+
+  PrivateRouteTable2:
+    Type: AWS::EC2::RouteTable
+    Properties: 
+      VpcId: !Ref MainVPC
+      Tags: 
+        - Key: Name 
+          Value: !Sub "${EnvironmentName} Private Routes (AZ2)"
+
+  DefaultPrivateRoute2:
+    Type: AWS::EC2::Route
+    Properties:
+      RouteTableId: !Ref PrivateRouteTable2
+      DestinationCidrBlock: 0.0.0.0/0
+      NatGatewayId: !Ref NatGateway2
+
+  PrivateSubnet2RouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId: !Ref PrivateRouteTable2
+      SubnetId: !Ref PrivateSubnet2
+
+  ###########
+  # Storage #
+  ###########
+
+  # S3 bucket to store application code
+  ApplicationCodeBucket:
+    Type: AWS::S3::Bucket
+    DeletionPolicy: Retain
+    Properties:
+      AccessControl: Private
+      Tags: 
+        - Key: "Name"
+          Value: !Sub "${EnvironmentName} Application code bucket"
+
+  #######
+  # IAM #
+  #######
+
+  # IAM Role for App Server to access S3 in read only mode
+  AppServerIamRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - ec2.amazonaws.com
+            Action:
+              - 'sts:AssumeRole' 
+      Policies:
+        - PolicyName: "app-code-s3-bucket-read-only-policy"
+          PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+              - Effect: Allow
+                Action:
+                  - "s3:Get*"
+                  - "s3:List*"            
+                Resource:
+                  Fn::GetAtt: ApplicationCodeBucket.Arn
+      Tags: 
+        - Key: "Name"
+          Value: !Sub "${EnvironmentName} Application server IAM role"
+
+  # App server IAM instance profile
+  AppServerProfileWithRoles:
+    Type: AWS::IAM::InstanceProfile
+    Properties:
+      Roles:
+        - !Ref AppServerIamRole
+
+  ###############
+  # APP SERVERS #
+  ###############
+
+  # Security Group for incoming web traffic on Application Servers
+  AppServerSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Security group to which only allows inbound access on TCP port 80 and also allows unrestricted outbound access.
+      GroupName: App Server Security Group
+      SecurityGroupEgress: 
+        - Description: Unrestricted outbound access.
+          CidrIp: 0.0.0.0/0
+          IpProtocol: "-1"
+          FromPort: -1
+          ToPort: -1
+      SecurityGroupIngress: 
+        - Description: Allow inbound access on TCP port 80 only
+          CidrIp: 0.0.0.0/0
+          IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+      VpcId: !Ref MainVPC
+      Tags: 
+        - Key: "Name"
+          Value: !Sub "${EnvironmentName} Application server security group"
+
+  # App server instances launch configuration
+  AppServerLaunchConfiguration:
+    Type: AWS::AutoScaling::LaunchConfiguration
+    Properties:
+      ImageId: !Ref AppServerAMI
+      InstanceType: !Ref AppServerInstanceType
+      SecurityGroups: 
+        - !Ref AppServerSecurityGroup
+      IamInstanceProfile: !Ref AppServerProfileWithRoles
+      AssociatePublicIpAddress: false
+      BlockDeviceMappings:
+        - DeviceName: "/dev/sdk"
+          Ebs:
+            VolumeSize: !Ref AppServerVolumeSize
+      UserData:
+        Fn::Base64: !Sub |
+          #!/bin/bash
+          apt-get update -y
+          apt-get install apache2 -y
+          systemctl start apache2.service
+          cd /var/www/html
+          echo "Udacity Demo Web Server Up and Running!" > index.html
+
+  # Application target group (health check)
+  AppTargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      HealthCheckIntervalSeconds: 10
+      HealthCheckPath: /
+      HealthCheckProtocol: HTTP
+      HealthCheckTimeoutSeconds: 8
+      HealthyThresholdCount: 2
+      Port: 80
+      Protocol: HTTP
+      UnhealthyThresholdCount: 5
+      VpcId: !Ref MainVPC
+      Tags: 
+        - Key: "Name"
+          Value: !Sub "${EnvironmentName} Application server target group"
+
+  # Auto scaling group for Application servers
+  AppServerAutoScalingGroup:
+    Type: AWS::AutoScaling::AutoScalingGroup
+    Properties:
+      AutoScalingGroupName: !Sub ${EnvironmentName} App server auto scaling group
+      LaunchConfigurationName: !Ref AppServerLaunchConfiguration
+      MaxSize: !Ref AppServerInstancesMax
+      MinSize: !Ref AppServerInstancesMin
+      VPCZoneIdentifier:
+        - !Ref PrivateSubnet1
+        - !Ref PrivateSubnet2
+      TargetGroupARNs:
+      - !Ref AppTargetGroup
+      Tags: 
+        - Key: "Name"
+          PropagateAtLaunch: true
+          Value: !Sub "${EnvironmentName} Application server auto scaling group"
+
+  # Security Group for incoming web traffic on Application Servers
+  LoadBalancerSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Security group for web load balancer allows inbound/outbound access on TCP port 80.
+      GroupName: Load Balancer Security Group
+      SecurityGroupEgress: 
+        - Description: Allow outbound access on TCP port 80 only
+          CidrIp: 0.0.0.0/0
+          IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+      SecurityGroupIngress: 
+        - Description: Allow inbound access on TCP port 80 only
+          CidrIp: 0.0.0.0/0
+          IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+      VpcId: !Ref MainVPC
+      Tags: 
+        - Key: "Name"
+          Value: !Sub "${EnvironmentName} Application load balancer security group"
+
+  AppLoadBalancer:
+    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+    Properties:
+      Subnets:
+      - !Ref PublicSubnet1
+      - !Ref PublicSubnet2
+      SecurityGroups:
+      - !Ref LoadBalancerSecurityGroup
+      Tags: 
+        - Key: "Name"
+          Value: !Sub "${EnvironmentName} Application load balancer"
+
+  AppLoadBalancerListener:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      DefaultActions:
+      - Type: forward
+        TargetGroupArn: !Ref AppTargetGroup
+      LoadBalancerArn: !Ref AppLoadBalancer
+      Port: 80
+      Protocol: HTTP
+  
+  AppLoadBalancerListenerRule:
+      Type: AWS::ElasticLoadBalancingV2::ListenerRule
+      Properties:
+        Actions:
+        - Type: forward
+          TargetGroupArn: !Ref AppTargetGroup
+        Conditions:
+        - Field: path-pattern
+          Values: [/]
+        ListenerArn: !Ref AppLoadBalancerListener
+        Priority: 1
+
+Outputs: 
+  VPC:
+    Description: "A reference to the project VPC"
+    Value: !Ref MainVPC
+    Export:
+      Name: !Sub ${EnvironmentName}-VPCID
+  PrivateSubnet1:
+      Description: A reference to the private subnet in the 1st Availability Zone
+      Value: !Ref PrivateSubnet1
+      Export:
+        Name: !Sub ${EnvironmentName}-PRI1-SN  
+  PrivateSubnet2:
+      Description: A reference to the private subnet in the 1st Availability Zone
+      Value: !Ref PrivateSubnet2
+      Export:
+        Name: !Sub ${EnvironmentName}-PRI2-SN  
+  PublicSubnet1:
+      Description: A reference to the public subnet in the 1st Availability Zone
+      Value: !Ref PublicSubnet1
+      Export:
+        Name: !Sub ${EnvironmentName}-PUB1-SN  
+  PublicSubnet2:
+      Description: A reference to the public subnet in the 2st Availability Zone
+      Value: !Ref PublicSubnet2
+      Export:
+        Name: !Sub ${EnvironmentName}-PUB2-SN
+  ApplicationCodeBucketName:
+    Value: !Ref ApplicationCodeBucket
+    Description: Name of the sample Amazon S3 bucket with a logging configuration.
+  LoadBalancerURL:
+    Value: 
+      Fn::Join:
+        - ""
+        - - "http://"
+          - Fn::GetAtt: AppLoadBalancer.DNSName
+    Description: URL of the application load balancer.
+
